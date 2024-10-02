@@ -1,0 +1,128 @@
+import dash
+from dash import dcc, html
+from dash.dependencies import Input, Output
+import plotly.graph_objects as go
+import plotly.express as px
+import pandas as pd
+import sqlite3
+import WatchWrangle
+import UZeppWrangle
+
+# Initialize Dash app
+app = dash.Dash(__name__)
+
+# Define available signals
+zepp_sensor_signals = [
+    'dbg_acc_1', 'dbg_acc_2', 'dbg_acc_3', 'dbg_gyro_1', 
+    'dbg_gyro_2', 'dbg_var_1', 'dbg_var_2', 'dbg_var_3', 
+    'dbg_var_4', 'dbg_sum_gx', 'dbg_sum_gy', 'dbg_sv_ax', 
+    'dbg_sv_ay', 'dbg_max_ax', 'dbg_max_ay', 'dbg_min_az', 
+    'dbg_max_az'
+]
+zepp_calc_signals = [
+    'backswing_time', 'power', 'ball_spin', 'impact_position_x', 
+    'impact_position_y', 'racket_speed', 'impact_region'
+]
+
+# Load and process data
+UZepp_path = "/home/blueaz/Downloads/SensorDownload/Compare/ztennis.db"
+start_date = '2024-06-12'
+end_date = '2024-06-14'
+dfu = UZeppWrangle.UZeppWrangle(UZepp_path, start_date, end_date)
+
+# Convert 'timestamp' columns to datetime with a specified format
+dfu['timestamp'] = pd.to_datetime(dfu['timestamp'], format='%m-%d-%Y %I:%M:%S.%f %p', errors='coerce')
+
+
+# Layout for the Dash app
+app.layout = html.Div([
+    html.H1("Zepp Sensor Signal Dashboard"),
+    dcc.DatePickerRange(
+        id='date-picker',
+        start_date=start_date,
+        end_date=end_date,
+        display_format='YYYY-MM-DD'
+    ),
+    html.Div([
+        html.Label("Select X-axis Signal"),
+        dcc.Dropdown(
+            id='x-axis-signal',
+            options=[{'label': 'Timestamp', 'value': 'timestamp'}],
+            value='timestamp'  # Default x-axis is timestamp
+        ),
+    ]),
+    html.Div([
+        html.Label("Select Y-axis Signal"),
+        dcc.Dropdown(
+            id='y-axis-signal',
+            options=[{'label': signal, 'value': signal} for signal in zepp_calc_signals],
+            value='dbg_acc_1'  # Default Y-axis signal
+        ),
+    ]),
+    html.Div([
+        html.Label("Add Additional Zepp Signals"),
+        dcc.Dropdown(
+            id='additional-signals',
+            options=[{'label': signal, 'value': signal} for signal in zepp_calc_signals],
+            multi=True
+        ),
+    ]),
+    dcc.Graph(id='sensor-graph'),
+])
+
+# Update the graph when the user selects signals
+@app.callback(
+    Output('sensor-graph', 'figure'),
+    [Input('x-axis-signal', 'value'),
+     Input('y-axis-signal', 'value'),
+     Input('additional-signals', 'value'),
+     Input('date-picker', 'start_date'),
+     Input('date-picker', 'end_date')]
+)
+def update_graph(x_signal, y_signal, additional_signals, start_date, end_date):
+    # Filter data based on date range
+    dfu_filtered = dfu[(dfu['timestamp'] >= start_date) & (dfu['timestamp'] <= end_date)]
+
+    # Initialize the figure
+    fig = go.Figure()
+
+    # X-axis data (use Zepp timestamp)
+    x_data = dfu_filtered['timestamp']
+
+    # Normalize the selected y-axis signal
+    y_data = dfu_filtered.get(y_signal, None)
+    if y_data is not None:
+        y_data_normalized = (y_data - y_data.min()) / (y_data.max() - y_data.min())
+        fig.add_trace(go.Scatter(
+            x=x_data,
+            y=y_data_normalized,
+            mode='lines+markers',
+            name=f'Zepp {y_signal} (Normalized)'
+        ))
+
+    # Add additional Zepp signals
+    if additional_signals:
+        for signal in additional_signals:
+            if signal in dfu_filtered.columns:
+                additional_y_data = dfu_filtered[signal]
+                additional_y_normalized = (additional_y_data - additional_y_data.min()) / (additional_y_data.max() - additional_y_data.min())
+                fig.add_trace(go.Scatter(
+                    x=x_data,
+                    y=additional_y_normalized,
+                    mode='lines+markers',
+                    name=f'Zepp {signal} (Normalized)'
+                ))
+
+    # Update layout of the figure
+    fig.update_layout(
+        title=f'Zepp Sensor Data Plot (Normalized)',
+        xaxis_title='Timestamp',
+        yaxis_title='Normalized Value',
+        template='plotly'
+    )
+
+    return fig
+
+if __name__ == '__main__':
+    app.run_server(debug=True)
+
